@@ -2,11 +2,9 @@ const express = require("express");
 const postgres = require("postgres");
 const z = require("zod");
 const crypto = require("crypto");
-const fetch = require("node-fetch");
 
 const app = express();
 const port = 8000;
-
 const sql = postgres({ db: "REST", user: "user", password: "postgres", port: "5433" });
 
 app.use(express.json());
@@ -28,204 +26,246 @@ const UserSchema = z.object({
 const CreateUserSchema = UserSchema.omit({ id: true });
 const UpdateUserSchema = CreateUserSchema.partial();
 
+const OrderSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  productIds: z.array(z.string()),
+  total: z.number(),
+  payment: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+const CreateOrderSchema = z.object({
+  userId: z.string(),
+  productIds: z.array(z.string()),
+});
+
 function hashPassword(password) {
   return crypto.createHash("sha512").update(password).digest("hex");
 }
 
 app.post("/products", async (req, res) => {
   const result = await CreateProductSchema.safeParse(req.body);
-
-  if (!result.success) {
-    return res.status(400).send(result);
-  }
-
-  const { name, about, price } = result.data;
-
-  try {
+  if (result.success) {
+    const { name, about, price } = result.data;
     const product = await sql`
       INSERT INTO products (name, about, price)
       VALUES (${name}, ${about}, ${price})
       RETURNING *
     `;
-    res.status(201).send(product[0]);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur lors de la création du produit." });
+    res.send(product[0]);
+  } else {
+    res.status(400).send(result);
   }
 });
 
 app.get("/products", async (req, res) => {
+  const { name, about, price } = req.query;
+
   try {
-    const { name, about, price } = req.query;
-
-    let query = sql`SELECT * FROM products WHERE TRUE`;
-
+    let conditions = [];
     if (name) {
-      query = sql`${query} AND name ILIKE ${'%' + name + '%'}`;
+      conditions.push(sql`name ILIKE ${'%' + name + '%'}`);
     }
     if (about) {
-      query = sql`${query} AND about ILIKE ${'%' + about + '%'}`;
+      conditions.push(sql`about ILIKE ${'%' + about + '%'}`);
     }
     if (price) {
-      const numericPrice = parseFloat(price);
-      if (!isNaN(numericPrice)) {
-        query = sql`${query} AND price <= ${numericPrice}`;
-      }
+      conditions.push(sql`price <= ${Number(price)}`);
     }
 
-    const products = await query;
+    let products;
+
+    if (conditions.length > 0) {
+      products = await sql`
+        SELECT * FROM products
+        WHERE ${sql.join(conditions, sql` AND `)}
+      `;
+    } else {
+      products = await sql`
+        SELECT * FROM products
+      `;
+    }
+
     res.send(products);
   } catch (error) {
     console.error(error);
-    res.status(500).send({ message: "Erreur lors de la recherche des produits." });
+    res.status(500).send({ message: "Erreur lors de la recherche de produits." });
   }
 });
 
 app.get("/products/:id", async (req, res) => {
-  const product = await sql`
-    SELECT * FROM products WHERE id = ${req.params.id}
-  `;
-
+  const product = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
   if (product.length > 0) {
     res.send(product[0]);
   } else {
-    res.status(404).send({ message: "Produit non trouvé." });
+    res.status(404).send({ message: "Not found" });
   }
 });
 
 app.delete("/products/:id", async (req, res) => {
   const product = await sql`
     DELETE FROM products
-    WHERE id = ${req.params.id}
+    WHERE id=${req.params.id}
     RETURNING *
   `;
-
   if (product.length > 0) {
     res.send(product[0]);
   } else {
-    res.status(404).send({ message: "Produit non trouvé." });
+    res.status(404).send({ message: "Not found" });
   }
 });
 
 app.post("/users", async (req, res) => {
   const result = await CreateUserSchema.safeParse(req.body);
-
-  if (!result.success) {
-    return res.status(400).send(result);
-  }
-
+  if (!result.success) return res.status(400).send(result);
   const { username, password, email } = result.data;
   const hashed = hashPassword(password);
-
-  try {
-    const user = await sql`
-      INSERT INTO users (username, password, email)
-      VALUES (${username}, ${hashed}, ${email})
-      RETURNING id, username, email
-    `;
-    res.status(201).send(user[0]);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur lors de la création de l'utilisateur." });
-  }
+  const user = await sql`
+    INSERT INTO users (username, password, email)
+    VALUES (${username}, ${hashed}, ${email})
+    RETURNING id, username, email
+  `;
+  res.status(201).send(user[0]);
 });
 
 app.put("/users/:id", async (req, res) => {
   const result = await CreateUserSchema.safeParse(req.body);
-
-  if (!result.success) {
-    return res.status(400).send(result);
-  }
-
+  if (!result.success) return res.status(400).send(result);
   const { username, password, email } = result.data;
   const hashed = hashPassword(password);
-
-  try {
-    const updated = await sql`
-      UPDATE users
-      SET username = ${username}, password = ${hashed}, email = ${email}
-      WHERE id = ${req.params.id}
-      RETURNING id, username, email
-    `;
-
-    if (updated.length > 0) {
-      res.send(updated[0]);
-    } else {
-      res.status(404).send({ message: "Utilisateur non trouvé." });
-    }
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur lors de la mise à jour." });
-  }
+  const updated = await sql`
+    UPDATE users
+    SET username = ${username}, password = ${hashed}, email = ${email}
+    WHERE id = ${req.params.id}
+    RETURNING id, username, email
+  `;
+  if (updated.length > 0) res.send(updated[0]);
+  else res.status(404).send({ message: "Utilisateur non trouvé." });
 });
 
 app.patch("/users/:id", async (req, res) => {
   const result = await UpdateUserSchema.safeParse(req.body);
-
-  if (!result.success) {
-    return res.status(400).send(result);
-  }
-
-  try {
-    const userInDb = await sql`
-      SELECT * FROM users WHERE id = ${req.params.id}
-    `;
-
-    if (userInDb.length === 0) {
-      return res.status(404).send({ message: "Utilisateur non trouvé." });
-    }
-
-    const user = userInDb[0];
-
-    const newUsername = result.data.username ?? user.username;
-    const newPassword = result.data.password ? hashPassword(result.data.password) : user.password;
-    const newEmail = result.data.email ?? user.email;
-
-    const updated = await sql`
-      UPDATE users
-      SET username = ${newUsername}, password = ${newPassword}, email = ${newEmail}
-      WHERE id = ${req.params.id}
-      RETURNING id, username, email
-    `;
-
-    res.send(updated[0]);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur lors de la modification." });
-  }
+  if (!result.success) return res.status(400).send(result);
+  const userInDb = await sql`SELECT * FROM users WHERE id = ${req.params.id}`;
+  if (userInDb.length === 0) return res.status(404).send({ message: "Utilisateur non trouvé." });
+  const user = userInDb[0];
+  const newUsername = result.data.username ?? user.username;
+  const newPassword = result.data.password ? hashPassword(result.data.password) : user.password;
+  const newEmail = result.data.email ?? user.email;
+  const updated = await sql`
+    UPDATE users
+    SET username = ${newUsername}, password = ${newPassword}, email = ${newEmail}
+    WHERE id = ${req.params.id}
+    RETURNING id, username, email
+  `;
+  res.send(updated[0]);
 });
 
 app.get("/f2p-games", async (req, res) => {
-  try {
-    const response = await fetch("https://www.freetogame.com/api/games");
-    const games = await response.json();
-    res.send(games);
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur lors de la récupération des jeux." });
-  }
+  const response = await fetch("https://www.freetogame.com/api/games");
+  const data = await response.json();
+  res.send(data);
 });
 
 app.get("/f2p-games/:id", async (req, res) => {
-  try {
-    const response = await fetch(`https://www.freetogame.com/api/game?id=${req.params.id}`);
-    const game = await response.json();
-
-    if (game && game.id) {
-      res.send(game);
-    } else {
-      res.status(404).send({ message: "Jeu non trouvé." });
-    }
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur lors de la récupération du jeu." });
-  }
+  const response = await fetch(`https://www.freetogame.com/api/game?id=${req.params.id}`);
+  const data = await response.json();
+  res.send(data);
 });
 
+app.post("/orders", async (req, res) => {
+  const result = await CreateOrderSchema.safeParse(req.body);
+  if (!result.success) return res.status(400).send(result);
+
+  const { userId, productIds } = result.data;
+  const products = await sql`SELECT * FROM products WHERE id = ANY(${productIds})`;
+  const total = products.reduce((sum, p) => sum + p.price, 0) * 1.2;
+
+  const now = new Date().toISOString();
+  const order = await sql`
+    INSERT INTO orders (user_id, product_ids, total, payment, created_at, updated_at)
+    VALUES (${userId}, ${productIds}, ${total}, false, ${now}, ${now})
+    RETURNING *
+  `;
+
+  res.status(201).send(order[0]);
+});
+
+app.get("/orders", async (req, res) => {
+  const orders = await sql`SELECT * FROM orders`;
+  const detailedOrders = await Promise.all(
+    orders.map(async (order) => {
+      const user = await sql`SELECT id, username, email FROM users WHERE id = ${order.user_id}`;
+      const products = await sql`SELECT * FROM products WHERE id = ANY(${order.product_ids})`;
+      return {
+        ...order,
+        user: user[0],
+        products: products,
+      };
+    })
+  );
+  res.send(detailedOrders);
+});
+
+app.get("/orders/:id", async (req, res) => {
+  const orders = await sql`SELECT * FROM orders WHERE id = ${req.params.id}`;
+  if (orders.length === 0) return res.status(404).send({ message: "Commande non trouvée." });
+  const order = orders[0];
+  const user = await sql`SELECT id, username, email FROM users WHERE id = ${order.user_id}`;
+  const products = await sql`SELECT * FROM products WHERE id = ANY(${order.product_ids})`;
+  res.send({ ...order, user: user[0], products: products });
+});
+
+app.put("/orders/:id", async (req, res) => {
+  const result = await CreateOrderSchema.safeParse(req.body);
+  if (!result.success) return res.status(400).send(result);
+
+  const { userId, productIds } = result.data;
+  const products = await sql`SELECT * FROM products WHERE id = ANY(${productIds})`;
+  const total = products.reduce((sum, p) => sum + p.price, 0) * 1.2;
+  const now = new Date().toISOString();
+
+  const updated = await sql`
+    UPDATE orders
+    SET user_id = ${userId}, product_ids = ${productIds}, total = ${total}, updated_at = ${now}
+    WHERE id = ${req.params.id}
+    RETURNING *
+  `;
+
+  if (updated.length === 0) return res.status(404).send({ message: "Commande non trouvée." });
+  res.send(updated[0]);
+});
+
+app.patch("/orders/:id", async (req, res) => {
+  const orderInDb = await sql`SELECT * FROM orders WHERE id = ${req.params.id}`;
+  if (orderInDb.length === 0) return res.status(404).send({ message: "Commande non trouvée." });
+  const order = orderInDb[0];
+
+  const newPayment = req.body.payment ?? order.payment;
+  const now = new Date().toISOString();
+
+  const updated = await sql`
+    UPDATE orders
+    SET payment = ${newPayment}, updated_at = ${now}
+    WHERE id = ${req.params.id}
+    RETURNING *
+  `;
+
+  res.send(updated[0]);
+});
+
+app.delete("/orders/:id", async (req, res) => {
+  const deleted = await sql`DELETE FROM orders WHERE id = ${req.params.id} RETURNING *`;
+  if (deleted.length === 0) return res.status(404).send({ message: "Commande non trouvée." });
+  res.send(deleted[0]);
+});
+
+// ---------------- Root ----------------
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
 
 app.listen(port, () => {
-  console.log(`✅ Serveur lancé sur http://localhost:${port}`);
+  console.log(`Listening on http://localhost:${port}`);
 });
