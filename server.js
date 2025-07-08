@@ -4,7 +4,7 @@ const z = require("zod");
 
 const app = express();
 const port = 8000;
-const sql = postgres({ db: "mydb", user: "user", password: "password" });
+const sql = postgres({ db: "REST", user: "user", password: "postgres", port: "5433" });
 
 app.use(express.json());
 
@@ -38,6 +38,40 @@ app.post("/products", async (req, res) => {
 
 app.get("/", (req, res) => {
   res.send("Hello World!");
+});
+
+app.get("/products", async (req, res) => {
+  const products = await sql`
+    SELECT * FROM products
+    `;
+
+  res.send(products);
+});
+
+app.get("/products/:id", async (req, res) => {
+  const product = await sql`
+    SELECT * FROM products WHERE id=${req.params.id}
+    `;
+
+  if (product.length > 0) {
+    res.send(product[0]);
+  } else {
+    res.status(404).send({ message: "Not found" });
+  }
+});
+
+app.delete("/products/:id", async (req, res) => {
+  const product = await sql`
+    DELETE FROM products
+    WHERE id=${req.params.id}
+    RETURNING *
+    `;
+
+  if (product.length > 0) {
+    res.send(product[0]);
+  } else {
+    res.status(404).send({ message: "Not found" });
+  }
 });
 
 app.listen(port, () => {
