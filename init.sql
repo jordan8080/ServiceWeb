@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS orders (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
-
 INSERT INTO products (name, about, price) VALUES
-  ('My first game', 'This is an awesome game', '60')
+  ('My first game', 'This is an awesome game', '60');
+
+  INSERT INTO users (username, password, email)
+VALUES ('john_doe', 'hashedpassword', 'john@example.com');

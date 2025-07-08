@@ -36,8 +36,8 @@ const OrderSchema = z.object({
   updatedAt: z.string(),
 });
 const CreateOrderSchema = z.object({
-  userId: z.string(),
-  productIds: z.array(z.string()),
+  userId: z.number(),
+  productIds: z.array(z.number()),
 });
 
 function hashPassword(password) {
@@ -127,6 +127,18 @@ app.post("/users", async (req, res) => {
     RETURNING id, username, email
   `;
   res.status(201).send(user[0]);
+});
+
+app.get("/users", async (req, res) => {
+  try {
+    const users = await sql`
+      SELECT id, username, email FROM users
+    `;
+    res.send(users);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Erreur lors de la récupération des utilisateurs." });
+  }
 });
 
 app.put("/users/:id", async (req, res) => {
