@@ -2,10 +2,11 @@ const express = require("express");
 const postgres = require("postgres");
 const z = require("zod");
 const crypto = require("crypto");
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const fetch = require("node-fetch");
 
 const app = express();
 const port = 8000;
+
 const sql = postgres({ db: "REST", user: "user", password: "postgres", port: "5433" });
 
 app.use(express.json());
@@ -31,82 +32,92 @@ function hashPassword(password) {
   return crypto.createHash("sha512").update(password).digest("hex");
 }
 
-
 app.post("/products", async (req, res) => {
   const result = await CreateProductSchema.safeParse(req.body);
-  if (result.success) {
-    const { name, about, price } = result.data;
-    try {
-      const product = await sql`
-        INSERT INTO products (name, about, price)
-        VALUES (${name}, ${about}, ${price})
-        RETURNING *
-      `;
-      res.status(201).send(product[0]);
-    } catch (error) {
-      console.error(error);
-      res.status(500).send({ message: "Erreur lors de la création du produit." });
-    }
-  } else {
-    res.status(400).send(result);
-  }
-});
 
-app.get("/", (req, res) => {
-  res.send("Hello World!");
+  if (!result.success) {
+    return res.status(400).send(result);
+  }
+
+  const { name, about, price } = result.data;
+
+  try {
+    const product = await sql`
+      INSERT INTO products (name, about, price)
+      VALUES (${name}, ${about}, ${price})
+      RETURNING *
+    `;
+    res.status(201).send(product[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ message: "Erreur lors de la création du produit." });
+  }
 });
 
 app.get("/products", async (req, res) => {
   try {
-    const products = await sql`SELECT * FROM products`;
+    const { name, about, price } = req.query;
+
+    let query = sql`SELECT * FROM products WHERE TRUE`;
+
+    if (name) {
+      query = sql`${query} AND name ILIKE ${'%' + name + '%'}`;
+    }
+    if (about) {
+      query = sql`${query} AND about ILIKE ${'%' + about + '%'}`;
+    }
+    if (price) {
+      const numericPrice = parseFloat(price);
+      if (!isNaN(numericPrice)) {
+        query = sql`${query} AND price <= ${numericPrice}`;
+      }
+    }
+
+    const products = await query;
     res.send(products);
   } catch (error) {
     console.error(error);
-    res.status(500).send({ message: "Erreur lors de la récupération des produits." });
+    res.status(500).send({ message: "Erreur lors de la recherche des produits." });
   }
 });
 
 app.get("/products/:id", async (req, res) => {
-  try {
-    const product = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
-    if (product.length > 0) {
-      res.send(product[0]);
-    } else {
-      res.status(404).send({ message: "Produit non trouvé." });
-    }
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur serveur." });
+  const product = await sql`
+    SELECT * FROM products WHERE id = ${req.params.id}
+  `;
+
+  if (product.length > 0) {
+    res.send(product[0]);
+  } else {
+    res.status(404).send({ message: "Produit non trouvé." });
   }
 });
 
 app.delete("/products/:id", async (req, res) => {
-  try {
-    const product = await sql`
-      DELETE FROM products
-      WHERE id=${req.params.id}
-      RETURNING *
-    `;
-    if (product.length > 0) {
-      res.send(product[0]);
-    } else {
-      res.status(404).send({ message: "Produit non trouvé." });
-    }
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Erreur serveur." });
+  const product = await sql`
+    DELETE FROM products
+    WHERE id = ${req.params.id}
+    RETURNING *
+  `;
+
+  if (product.length > 0) {
+    res.send(product[0]);
+  } else {
+    res.status(404).send({ message: "Produit non trouvé." });
   }
 });
 
-
 app.post("/users", async (req, res) => {
   const result = await CreateUserSchema.safeParse(req.body);
+
   if (!result.success) {
     return res.status(400).send(result);
   }
+
   const { username, password, email } = result.data;
+  const hashed = hashPassword(password);
+
   try {
-    const hashed = hashPassword(password);
     const user = await sql`
       INSERT INTO users (username, password, email)
       VALUES (${username}, ${hashed}, ${email})
@@ -121,11 +132,14 @@ app.post("/users", async (req, res) => {
 
 app.put("/users/:id", async (req, res) => {
   const result = await CreateUserSchema.safeParse(req.body);
+
   if (!result.success) {
     return res.status(400).send(result);
   }
+
   const { username, password, email } = result.data;
   const hashed = hashPassword(password);
+
   try {
     const updated = await sql`
       UPDATE users
@@ -133,6 +147,7 @@ app.put("/users/:id", async (req, res) => {
       WHERE id = ${req.params.id}
       RETURNING id, username, email
     `;
+
     if (updated.length > 0) {
       res.send(updated[0]);
     } else {
@@ -146,24 +161,33 @@ app.put("/users/:id", async (req, res) => {
 
 app.patch("/users/:id", async (req, res) => {
   const result = await UpdateUserSchema.safeParse(req.body);
+
   if (!result.success) {
     return res.status(400).send(result);
   }
+
   try {
-    const userInDb = await sql`SELECT * FROM users WHERE id = ${req.params.id}`;
+    const userInDb = await sql`
+      SELECT * FROM users WHERE id = ${req.params.id}
+    `;
+
     if (userInDb.length === 0) {
       return res.status(404).send({ message: "Utilisateur non trouvé." });
     }
+
     const user = userInDb[0];
+
     const newUsername = result.data.username ?? user.username;
     const newPassword = result.data.password ? hashPassword(result.data.password) : user.password;
     const newEmail = result.data.email ?? user.email;
+
     const updated = await sql`
       UPDATE users
       SET username = ${newUsername}, password = ${newPassword}, email = ${newEmail}
       WHERE id = ${req.params.id}
       RETURNING id, username, email
     `;
+
     res.send(updated[0]);
   } catch (error) {
     console.error(error);
@@ -171,38 +195,37 @@ app.patch("/users/:id", async (req, res) => {
   }
 });
 
-
 app.get("/f2p-games", async (req, res) => {
   try {
     const response = await fetch("https://www.freetogame.com/api/games");
-    if (!response.ok) {
-      return res.status(500).json({ message: "Erreur lors de la récupération des jeux F2P." });
-    }
     const games = await response.json();
-    res.json(games);
+    res.send(games);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Erreur serveur." });
+    res.status(500).send({ message: "Erreur lors de la récupération des jeux." });
   }
 });
 
 app.get("/f2p-games/:id", async (req, res) => {
   try {
     const response = await fetch(`https://www.freetogame.com/api/game?id=${req.params.id}`);
-    if (!response.ok) {
-      return res.status(500).json({ message: "Erreur lors de la récupération du jeu F2P." });
-    }
     const game = await response.json();
-    if (!game || game.status === 0) {
-      return res.status(404).json({ message: "Jeu F2P non trouvé." });
+
+    if (game && game.id) {
+      res.send(game);
+    } else {
+      res.status(404).send({ message: "Jeu non trouvé." });
     }
-    res.json(game);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Erreur serveur." });
+    res.status(500).send({ message: "Erreur lors de la récupération du jeu." });
   }
 });
 
+app.get("/", (req, res) => {
+  res.send("Hello World!");
+});
+
 app.listen(port, () => {
-  console.log(`Listening on http://localhost:${port}`);
+  console.log(`✅ Serveur lancé sur http://localhost:${port}`);
 });
