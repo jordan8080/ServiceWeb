@@ -24,6 +24,9 @@ const CategorySchema = z.object({
 });
 const CreateCategorySchema = CategorySchema.omit({ _id: true });
 
+app.get("/", (req, res) => {
+    res.send("Bienvenue sur mon API !");
+});
 
 app.post("/categories", async (req, res) => {
     const result = await CreateCategorySchema.safeParse(req.body);
@@ -34,6 +37,16 @@ app.post("/categories", async (req, res) => {
         res.send({ _id: ack.insertedId, name });
     } else {
         res.status(400).send(result);
+    }
+});
+
+app.get("/categories", async (req, res) => {
+    try {
+        const categories = await db.collection("categories").find({}).toArray();
+        res.send(categories);
+    } catch (error) {
+        console.error("Erreur lors de la récupération des catégories :", error);
+        res.status(500).send({ message: "Erreur serveur" });
     }
 });
 
@@ -97,6 +110,6 @@ client.connect().then(async () => {
     console.log("Found documents filtered by { a: 3 } =>", filteredDocs);
 
     app.listen(port, () => {
-        console.log(`✅ Listening on http://localhost:${port}`);
+        console.log(`Listening on http://localhost:${port}`);
     });
 });

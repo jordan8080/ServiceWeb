@@ -273,7 +273,6 @@ app.delete("/orders/:id", async (req, res) => {
   res.send(deleted[0]);
 });
 
-// ---------------- Root ----------------
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
