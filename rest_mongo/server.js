@@ -1,8 +1,14 @@
 const express = require("express");
 const { MongoClient, ObjectId } = require("mongodb");
 const { z } = require("zod");
+const http = require("http");
+const { Server } = require("socket.io");
+
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
 const port = 8000;
 const client = new MongoClient("mongodb://localhost:27017");
 let db;
@@ -18,98 +24,146 @@ const ProductSchema = z.object({
 });
 const CreateProductSchema = ProductSchema.omit({ _id: true });
 
-const CategorySchema = z.object({
-    _id: z.string(),
-    name: z.string(),
-});
-const CreateCategorySchema = CategorySchema.omit({ _id: true });
-
-app.get("/", (req, res) => {
-    res.send("Bienvenue sur mon API !");
-});
-
-app.post("/categories", async (req, res) => {
-    const result = await CreateCategorySchema.safeParse(req.body);
-
-    if (result.success) {
-        const { name } = result.data;
-        const ack = await db.collection("categories").insertOne({ name });
-        res.send({ _id: ack.insertedId, name });
-    } else {
-        res.status(400).send(result);
-    }
-});
-
-app.get("/categories", async (req, res) => {
-    try {
-        const categories = await db.collection("categories").find({}).toArray();
-        res.send(categories);
-    } catch (error) {
-        console.error("Erreur lors de la récupération des catégories :", error);
-        res.status(500).send({ message: "Erreur serveur" });
-    }
-});
+app.use(express.static("public"));
 
 app.post("/products", async (req, res) => {
     const result = await CreateProductSchema.safeParse(req.body);
 
     if (result.success) {
-        const { name, about, price, categoryIds } = result.data;
-        const categoryObjectIds = categoryIds.map((id) => new ObjectId(id));
+        try {
+            const { name, about, price, categoryIds } = result.data;
+            const categoryObjectIds = categoryIds.map((id) => new ObjectId(id));
 
-        const ack = await db.collection("products").insertOne({
-            name,
-            about,
-            price,
-            categoryIds: categoryObjectIds,
-        });
+            const ack = await db.collection("products").insertOne({
+                name,
+                about,
+                price,
+                categoryIds: categoryObjectIds,
+            });
 
-        res.send({
-            _id: ack.insertedId,
-            name,
-            about,
-            price,
-            categoryIds: categoryObjectIds,
-        });
+            const newProduct = {
+                _id: ack.insertedId,
+                name,
+                about,
+                price,
+                categoryIds: categoryObjectIds,
+            };
+
+            io.emit("products", { type: "create", data: newProduct });
+
+            res.status(201).send(newProduct);
+        } catch (error) {
+            console.error("Erreur POST /products :", error);
+            res.status(500).send({ message: "Erreur serveur" });
+        }
     } else {
         res.status(400).send(result);
     }
 });
 
 app.get("/products", async (req, res) => {
-    const result = await db
-        .collection("products")
-        .aggregate([
-            { $match: {} },
-            {
-                $lookup: {
-                    from: "categories",
-                    localField: "categoryIds",
-                    foreignField: "_id",
-                    as: "categories",
+    try {
+        const products = await db
+            .collection("products")
+            .aggregate([
+                { $match: {} },
+                {
+                    $lookup: {
+                        from: "categories",
+                        localField: "categoryIds",
+                        foreignField: "_id",
+                        as: "categories",
+                    },
                 },
-            },
-        ])
-        .toArray();
+            ])
+            .toArray();
 
-    res.send(result);
+        res.send(products);
+    } catch (error) {
+        console.error("Erreur GET /products :", error);
+        res.status(500).send({ message: "Erreur serveur" });
+    }
+});
+
+app.put("/products/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).send({ message: "ID invalide" });
+        }
+
+        const result = await CreateProductSchema.safeParse(req.body);
+        if (!result.success) {
+            return res.status(400).send(result);
+        }
+
+        const { name, about, price, categoryIds } = result.data;
+        const categoryObjectIds = categoryIds.map((cid) => new ObjectId(cid));
+
+        const updateResult = await db.collection("products").updateOne(
+            { _id: new ObjectId(id) },
+            {
+                $set: {
+                    name,
+                    about,
+                    price,
+                    categoryIds: categoryObjectIds,
+                },
+            }
+        );
+
+        if (updateResult.matchedCount === 0) {
+            return res.status(404).send({ message: "Produit non trouvé" });
+        }
+
+        const updatedProduct = {
+            _id: id,
+            name,
+            about,
+            price,
+            categoryIds: categoryObjectIds,
+        };
+
+        io.emit("products", { type: "update", data: updatedProduct });
+
+        res.send({ message: "Produit mis à jour" });
+    } catch (error) {
+        console.error("Erreur PUT /products/:id :", error);
+        res.status(500).send({ message: "Erreur serveur" });
+    }
+});
+
+app.delete("/products/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).send({ message: "ID invalide" });
+        }
+
+        const deleteResult = await db.collection("products").deleteOne({ _id: new ObjectId(id) });
+
+        if (deleteResult.deletedCount === 0) {
+            return res.status(404).send({ message: "Produit non trouvé" });
+        }
+
+        io.emit("products", { type: "delete", data: { _id: id } });
+
+        res.send({ message: "Produit supprimé" });
+    } catch (error) {
+        console.error("Erreur DELETE /products/:id :", error);
+        res.status(500).send({ message: "Erreur serveur" });
+    }
+});
+
+app.get("/", (req, res) => {
+    res.send("API Products avec Socket.io est en ligne !");
 });
 
 client.connect().then(async () => {
     db = client.db("myDB");
+    console.log("MongoDB connecté");
 
-    const collection = db.collection("documents");
-
-    const insertResult = await collection.insertMany([{ a: 1 }, { a: 2 }, { a: 3 }]);
-    console.log("Inserted documents =>", insertResult);
-
-    const findResult = await collection.find({}).toArray();
-    console.log("Found documents =>", findResult);
-
-    const filteredDocs = await collection.find({ a: 3 }).toArray();
-    console.log("Found documents filtered by { a: 3 } =>", filteredDocs);
-
-    app.listen(port, () => {
-        console.log(`Listening on http://localhost:${port}`);
+    server.listen(port, () => {
+        console.log(`Serveur démarré sur http://localhost:${port}`);
     });
 });

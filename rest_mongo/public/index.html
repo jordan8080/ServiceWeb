@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Products Live</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <h1>Liste des produits (live)</h1>
+  <ul id="products"></ul>
+
+  <script>
+    const socket = io("http://localhost:8000");
+
+    const productsList = document.getElementById("products");
+    let products = [];
+
+    fetch("http://localhost:8000/products")
+      .then(res => res.json())
+      .then(data => {
+        products = data;
+        render();
+      });
+
+    socket.on("products", (event) => {
+      console.log("Event reçu :", event);
+
+      if (event.type === "create") {
+        products.push(event.data);
+      } else if (event.type === "update") {
+        products = products.map(p => p._id === event.data._id ? event.data : p);
+      } else if (event.type === "delete") {
+        products = products.filter(p => p._id !== event.data._id);
+      }
+
+      render();
+    });
+
+    function render() {
+      productsList.innerHTML = "";
+      products.forEach(p => {
+        const li = document.createElement("li");
+        li.textContent = `${p.name} - ${p.price} €`;
+        productsList.appendChild(li);
+      });
+    }
+  </script>
+</body>
+</html>
